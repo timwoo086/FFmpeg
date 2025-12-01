@@ -1,39 +1,39 @@
-name: FFmpeg Build (AVS2 + 10bit + Filters)
+#!/bin/bash
+set -e  # 脚本出错立即退出，不继续执行
 
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:
+# 1. 安装依赖（调用同目录的 dependencies.sh）
+if [ -f ./build-scripts/dependencies.sh ]; then
+  source ./build-scripts/dependencies.sh
+else
+  echo "错误：找不到 dependencies.sh 文件！"
+  exit 1
+fi
 
-jobs:
-  build-linux:
-    runs-on: ubuntu-latest
-    steps:
-      # 步骤1：克隆仓库（含 FFmpeg 源码和脚本）
-      - name: Checkout Source
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
+# 2. 验证 FFmpeg 核心配置文件是否存在
+if [ ! -f ./configs/ffmpeg-config.sh ]; then
+  echo "错误：找不到 ffmpeg-config.sh 配置文件！"
+  exit 1
+fi
 
-      # 步骤2：给所有脚本添加执行权限（关键！避免 Permission denied）
-      - name: Make Scripts Executable
-        run: |
-          chmod +x ./build-scripts/*.sh
-          chmod +x ./configs/*.sh
-          chmod +x ./configure  # FFmpeg 自带的配置脚本
+# 3. 配置 FFmpeg（加载自定义编译选项）
+CONFIG=$(source ./configs/ffmpeg-config.sh)
+echo "FFmpeg 配置命令：$CONFIG"
+./configure $CONFIG || { echo "配置 FFmpeg 失败！"; exit 1; }
 
-      # 步骤3：执行编译脚本（调用 build.sh，Shell 命令都在里面）
-      - name: Build FFmpeg
-        run: bash ./build-scripts/build.sh
+# 4. 多线程编译（自动适配 CPU 核心数）
+echo "开始编译（使用 $(nproc) 个 CPU 核心）..."
+make -j$(nproc) || { echo "编译 FFmpeg 失败！"; exit 1; }
 
-      # 步骤4：上传产物
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ffmpeg-avs2-10bit-linux-x86_64
-          path: /output/ffmpeg-avs2-10bit-linux-x86_64.tar.gz
-          retention-days: 30
-          if-no-files-found: error
+# 5. 创建输出目录（避免权限问题）
+mkdir -p /output/usr/local
+echo "输出目录：/output/usr/local"
+
+# 6. 安装编译产物到输出目录
+make install DESTDIR=/output || { echo "安装 FFmpeg 失败！"; exit 1; }
+
+# 7. 打包产物（方便下载，包含 bin/lib/include 等）
+cd /output/usr/local
+tar -czf /output/ffmpeg-avs2-10bit-linux-x86_64.tar.gz \
+  bin include lib share || { echo "打包产物失败！"; exit 1; }
+
+echo "编译完成！产物已保存到 /output/ffmpeg-avs2-10bit-linux-x86_64.tar.gz"
